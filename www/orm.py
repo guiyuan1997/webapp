@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+__author__ = 'guiyuan'
 import aiomysql
 import asyncio
 import logging; logging.basicConfig(level=logging.INFO)
@@ -50,7 +52,12 @@ async def execute(sql, args, autocommit=True):
                 await conn.rollback()
             raise
         return affected
-
+#创建sql的?占位函数
+def create_args_string(num):
+    tmp = []
+    for i in range (num):
+        tmp.append('?')
+    return ','.join(tmp)
 class Field(object):
 
     def __init__(self, name, column_type, primarykey, default):
@@ -94,3 +101,38 @@ class ModelMetaclass(type):
     4.类的方法集合。
     '''
     def __new__(cls, name, bases, attrs):
+        if name == 'Model':
+            return type.__new__(cls, name, bases, attrs)
+        #获取表名
+        tablename = attrs.get('__table__', None) or name
+        logging.info('found model : %s (table:%s)' %(name, tablename))
+        mapping = dict()
+        fields = []
+        primarykey = None
+        for key, value in attrs.items():
+            if isinstance(value, Field):
+                print('found mapping: %s ---> %s' %(key, value))
+                mapping[key]=value
+                #找到主键
+                if value.primarykey:
+                    #如果找到了两次主键，就给一个重复主键的异常
+                    if primarykey:
+                        raise BaseException('Duplicate primary key for field: %s' % key)
+                    primarykey = key
+                #如果不是主键，就存入field字段中
+                else:
+                    fields.append(key)
+        #如果遍历完字段都没有找到主键的话
+        if not primarykey:
+            raise BaseException('Primary Key Not Found')
+        #将存入了mapping的字段从attr中删除，以免重复
+        for key in mapping.keys():
+            attrs.pop(key)
+        #防止列名与关键字冲突，定义一个方法，往每个列名上加上sql防冲突符号：``
+        escaped_fields = list(map(lambda x: '`%s`' %x, fields))
+        attrs['__mapping__']=mapping #定义了用来存放属性与列对应关系的属性
+        attrs['__table__']=tablename #用来存放表名的属性
+        attrs['__primarykey__']=primarykey #用来存放主键的属性
+        attrs['__fields__']=fields #存放除了主键以外的属性名
+        attrs['__select__']='select `%s`, %s from `%s`' %(primarykey, ','.join(escaped_fields), tablename)
+        attrs['__insert__']='insert into `%s` (%s, `%s`) values (%s)' % (tablename, ','.join(escaped_fields), primarykey, )
